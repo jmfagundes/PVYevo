@@ -1,4 +1,4 @@
-source("source_me.R")
+source("../PVYevo/source_me.R")
 
 # line 1 = Sl
 # line 2 = St
@@ -33,12 +33,54 @@ depths <- lapply(setNames(nm = list.files(path = "depths/", pattern = ".*mapped_
                    y
                  })
 
+mean.depth <- depths %>% lapply(function(x) mean(x$depth)) %>% unlist()
+
 depths.gg <- depths %>% bind_rows() %>%
-  ggplot(aes(position, depth, fill = "grey30")) + geom_line() + facet_wrap(~vir.line.rep.time, scales = "free", ncol = 4) +
+  ggplot(aes(position, depth)) + geom_col(color = "grey40") +
   theme(axis.text = element_text(size = 6),
-        strip.text = element_text(size = 8))
+        strip.text = element_text(size = 8)) +
+  geom_text(aes(label = paste0("Mean: ", round(mean_depth, digits = 2)), y = max/2, x = 5000),
+            data = depths %>% bind_rows() %>%
+              group_by(vir.line.rep.time) %>%
+              summarise(mean_depth = mean(depth),
+                        sd_depth = sd(depth),
+                        max = max(depth)),
+            color = "black", size = 2) +
+  geom_text(aes(label = paste0("SD: ", round(sd_depth, digits = 2)), y = max/4, x = 5000),
+            data = depths %>% bind_rows() %>%
+              group_by(vir.line.rep.time) %>%
+              summarise(mean_depth = mean(depth),
+                        sd_depth = sd(depth),
+                        max = max(depth)),
+            color = "black", size = 2) +
+  facet_wrap(~vir.line.rep.time, scales = "free", ncol = 4) +
+  ylab("Depth") + xlab("Position")
 
 ggsave("cov.pdf", depths.gg, width = 6.85, height = 9.21)
+
+# compare with deltaQc
+
+R_qPCR_data <- read_xlsx("R_qPCR_data.xlsx")
+R_qPCR_data$Sample <- paste0(R_qPCR_data$Virus %>%
+                               gsub("PVYNb", "PVYbe", .) %>%
+                               gsub("PVYSt", "PVYpo", .),
+                             "_",
+                             R_qPCR_data$Group %>%
+                               gsub("Sl", "1", .) %>%
+                               gsub("St", "2", .) %>%
+                               gsub("Nb", "3", .) %>%
+                               gsub("CTF", "4", .) %>%
+                               gsub("MIX", "5", .),
+                             R_qPCR_data$Line,
+                             R_qPCR_data$Passage) %>% gsub("None.*", "ori", .)
+
+mean.depth.corr.names <- setNames(mean.depth, nm = names(mean.depth) %>% gsub("_mapped.*", "", .))
+
+R_qPCR_data$Mean_cov <- mean.depth.corr.names[match(R_qPCR_data$Sample,
+                                                    names(mean.depth.corr.names))]
+
+R_qPCR_data %>% filter(!is.na(Mean_cov)) %>%
+  ggplot(aes(`-dCq`, Mean_cov)) + geom_point() + geom_smooth(method = "lm")
 
 # cistrons on NC_001616
 
@@ -54,6 +96,29 @@ cistron <- dplyr::mutate(cistron, x1 := x1 - 12,
                          cistron := factor(cistron,
                                            levels = c("P1", "HC-Pro", "P3", "6K1", "Cl", "6K2", "Nla-VPg", "Nla-Pro", "Nlb", "CP", "PIPO")))
 
+# export GTF
+
+GTF <- data.frame(source = "lofreq",
+                  feature = "CDS",
+                  start = cistron$x1,
+                  end = cistron$x2,
+                  score = ".",
+                  strand = "+",
+                  frame = "0",
+                  attributes = paste0("gene_id",
+                                      " ",
+                                      cistron$cistron %>%
+                                        gsub("^", "\"", .) %>%
+                                        gsub("$", "\";", .)))
+
+write.table(bind_cols(seqname = "PVYbe_final_cons",
+                      GTF), file = "PVYbe.gtf", col.names = FALSE, quote = FALSE, row.names = FALSE,
+            sep = "\t")
+
+write.table(bind_cols(seqname = "PVYpo_final_cons",
+                      GTF), file = "PVYpo.gtf", col.names = FALSE, quote = FALSE, row.names = FALSE,
+            sep = "\t")
+
 # levels for plots
 
 sample_levels <- c("PVYNb", "PVYSt",
@@ -63,21 +128,26 @@ sample_levels <- c("PVYNb", "PVYSt",
                    "Nb.L2 [4th]", "Nb.L2 [10th]",
                    "CTF.L1 [4th]", "CTF.L2 [1st]", "CTF.L2 [4th]",
                    "MIX.L1 [2nd]", "MIX.L1 [3rd]", "MIX.L2 [4th]", "MIX.L2 [9th]")
-  
 
 # filter matrices based on coverage
-
-mean.depth <- depths %>% lapply(function(x) mean(x$depth)) %>% unlist()
 
 # match file names
 
 names(mean.depth) <- names(mean.depth) %>% gsub("sorted.*", "recal_lofreq.vcf", .)
 
-be.samples.discarded <- lofreq.be.vcfs[!names(lofreq.be.vcfs) %in% names(mean.depth[mean.depth > 50])] %>% names()
-po.samples.discarded <- lofreq.po.vcfs[!names(lofreq.po.vcfs) %in% names(mean.depth[mean.depth > 50])] %>% names()
+be.samples.discarded <- lofreq.be.vcfs[!names(lofreq.be.vcfs) %in% names(mean.depth[mean.depth > 100])] %>% names()
+po.samples.discarded <- lofreq.po.vcfs[!names(lofreq.po.vcfs) %in% names(mean.depth[mean.depth > 100])] %>% names()
 
-lofreq.be.vcfs <- lofreq.be.vcfs[names(lofreq.be.vcfs) %in% names(mean.depth[mean.depth > 50])]
-lofreq.po.vcfs <- lofreq.po.vcfs[names(lofreq.po.vcfs) %in% names(mean.depth[mean.depth > 50])]
+lofreq.be.vcfs <- lofreq.be.vcfs[names(lofreq.be.vcfs) %in% names(mean.depth[mean.depth > 100])]
+lofreq.po.vcfs <- lofreq.po.vcfs[names(lofreq.po.vcfs) %in% names(mean.depth[mean.depth > 100])]
+
+# eliminate samples with no SNPs after filtering
+
+be.samples.discarded <- c(be.samples.discarded, names(lofreq.be.vcfs[lofreq.be.vcfs %>% lapply(function(x) nrow(x) == 0) %>% unlist()]))
+po.samples.discarded <- c(po.samples.discarded, names(lofreq.po.vcfs[lofreq.po.vcfs %>% lapply(function(x) nrow(x) == 0) %>% unlist()]))
+
+lofreq.be.vcfs <- lofreq.be.vcfs[lofreq.be.vcfs %>% lapply(function(x) nrow(x) > 0) %>% unlist()]
+lofreq.po.vcfs <- lofreq.po.vcfs[lofreq.po.vcfs %>% lapply(function(x) nrow(x) > 0) %>% unlist()]
 
 # benthamiana
 
@@ -91,18 +161,22 @@ be.freqs <- mapply(function(y, x) {
 names(lofreq.be.vcfs),
 lofreq.be.vcfs, SIMPLIFY = FALSE) %>% bind_rows()
 
-be.mtx <- lapply(list(`Sl.L1 [4th]` = c("PVYNb", "111"),
-                      `Sl.L1 [4th]` = c("PVYNb", "121"),
+# filter alleles based on frequency
+
+#be.freqs <- be.freqs[be.freqs$freq >= freq.thresh,]
+
+be.mtx <- lapply(list(#`Sl.L1 [1st]` = c("PVYNb", "111"),
+                      `Sl.L2 [1st]` = c("PVYNb", "121"),
                       `St.L1 [4th]` = c("PVYNb", "214"),
                       #line2pop1time5 = c("0", "215"),
                       `St.L2 [4th]` = c("PVYNb", "224"),
                       #line2pop2time5 = c("0", "225"),
-                      `Nb.L2 [10th]` = c("PVYNb", "3110"),
+                      `Nb.L1 [10th]` = c("PVYNb", "3110"),
                       `Nb.L2 [10th]` = c("PVYNb", "3210"),
                       #line4pop2time8 = c("0", "428"),
-                      `MIX.L2 [9th]` = c("PVYNb", "513"),
+                      `MIX.L1 [3rd]` = c("PVYNb", "513"),
                       `MIX.L2 [9th]` = c("PVYNb", "529"),
-                      `Nb.L2 [4th]` = c("PVYNb", "314"),
+                      `Nb.L1 [4th]` = c("PVYNb", "314"),
                       `Nb.L2 [4th]` = c("PVYNb", "324"),
                       `CTF.L1 [4th]` = c("PVYNb", "414"),
                       `CTF.L2 [4th]` = c("PVYNb", "424"),
@@ -144,9 +218,13 @@ po.freqs <- mapply(function(y, x) {
 names(lofreq.po.vcfs),
 lofreq.po.vcfs, SIMPLIFY = FALSE) %>% bind_rows()
 
+# filter alleles based on frequency
+
+#po.freqs <- po.freqs[po.freqs$freq >= freq.thresh,]
+
 po.mtx <- lapply(list(#line1pop1time4 = c("0", "114"),
                       #line1pop1time5 = c("0", "115"),
-                      `Sl.L2 [1st]` = c("PVYSt", "121"),
+                      #`Sl.L2 [1st]` = c("PVYSt", "121"),
                       `St.L1 [6th]` = c("PVYSt", "216"),
                       `St.L2 [10th]` = c("PVYSt", "2210"),
                       `Nb.L1 [10th]` = c("PVYSt", "3110"),
@@ -185,13 +263,13 @@ po.mtx <- lapply(list(#line1pop1time4 = c("0", "114"),
 # proportion of mutations in inocule that are present at time 4
 
 be.mut_in_4 <- lapply(be.mtx, function(x) {
-  mut.0 <- be.freqs %>% filter(line.rep.time == 0) %>% nrow()
+  mut.0 <- be.freqs %>% filter(line.rep.time == "PVYNb") %>% nrow()
   mut.0_in_4 <- x[x[1] > 0 & x[2] > 0,] %>% nrow()
   mut.0_in_4 / mut.0
 })
 
 po.mut_in_4 <- lapply(po.mtx, function(x) {
-  mut.0 <- po.freqs %>% filter(line.rep.time == 0) %>% nrow()
+  mut.0 <- po.freqs %>% filter(line.rep.time == "PVYSt") %>% nrow()
   mut.0_in_4 <- x[x[1] > 0 & x[2] > 0,] %>% nrow()
   mut.0_in_4 / mut.0
 })
@@ -199,11 +277,11 @@ po.mut_in_4 <- lapply(po.mtx, function(x) {
 # syn and nonsyn
 
 be.syn_nonsyn <- lapply(lofreq.be.vcfs, function(x) {
-  if(nrow(x) != 0) check_snp(ref$PVYbe_final_cons, x, 173, 9358)
+  if(nrow(x) != 0) check_snp.fix(ref$PVYbe_final_cons, x, 173, 9355)
 })
 
 po.syn_nonsyn <- lapply(lofreq.po.vcfs, function(x) {
-  if(nrow(x) != 0) check_snp(ref$PVYpo_final_cons, x, 173, 9358)
+  if(nrow(x) != 0) check_snp.fix(ref$PVYpo_final_cons, x, 173, 9355)
 })
 
 # mutations fixed at time 4
@@ -282,13 +360,47 @@ be.mtx.cat[is.na(be.mtx.cat)] <- 0
 be.mtx.cat <- be.mtx.cat %>% as.data.frame()
 
 be.common.mut <- be.syn_nonsyn %>% bind_rows(.id = "data") %>% as.data.frame()
-row.names(be.common.mut) <- be.common.mut$data %>% gsub(".*be_", "", .) %>% gsub(".*ori", "0", .) %>% gsub("_mapped.*", "", .)
+row.names(be.common.mut) <- be.common.mut$data %>% gsub(".*be_", "", .) %>% gsub(".*ori", "0", .) %>%
+  gsub("_mapped.*", "", .) %>%
+  gsub("^1", "Sl.L", .) %>%
+  gsub("^2", "St.L", .) %>%
+  gsub("^3", "Nb.L", .) %>%
+  gsub("^4", "CTF.L", .) %>%
+  gsub("^5", "MIX.L", .) %>%
+  
+  gsub("L(\\d)", "L\\1 [", .) %>%
+  gsub("\\[(\\d+)", "[\\1th]", .) %>%
+  gsub("1th]", "1st]", .) %>%
+  gsub("2th]", "2nd]", .) %>%
+  gsub("3th]", "3rd]", .) %>%
+  gsub("^0", "PVYNb", .)
 be.common.mut <- be.common.mut[-1] %>% t() %>% as.data.frame()
 
 be.mtx.cat.orf <- be.mtx.cat[row.names(be.mtx.cat) %in% row.names(be.common.mut),] # all mutations in coding region so far
 
-be.common.nonsyn <- be.mtx.cat.orf[apply(be.common.mut, 1, function(x) any(grepl("nonsyn", x))),]
-be.common.syn <- be.mtx.cat.orf[apply(be.common.mut, 1, function(x) any(grepl("^syn", x))),]
+be.common.mut <- be.common.mut[be.mtx.cat.orf %>% colnames()]
+be.common.mut <- be.common.mut[be.mtx.cat.orf %>% rownames(),]
+
+substitute.freq.syn_nonsyn <- function(x, y, mut) {
+  
+  mtx <- x
+  
+  for (i in 1:nrow(x)) {
+    
+    row <- x[i,]
+    
+    for (j in 1:length(row)) {
+      
+      if (y[i, j] != mut | is.na(y[i, j])) mtx[i, j] <- NA
+      
+    }
+  }
+  return(mtx)
+}
+
+be.common.nonsyn <- substitute.freq.syn_nonsyn(be.mtx.cat.orf, be.common.mut, "nonsyn")
+be.common.syn <- substitute.freq.syn_nonsyn(be.mtx.cat.orf, be.common.mut, "syn")
+be.common.stop <- substitute.freq.syn_nonsyn(be.mtx.cat.orf, be.common.mut, "stop")
 
 # potato
 
@@ -300,13 +412,30 @@ po.mtx.cat[is.na(po.mtx.cat)] <- 0
 po.mtx.cat <- po.mtx.cat %>% as.data.frame()
 
 po.common.mut <- po.syn_nonsyn %>% bind_rows(.id = "data") %>% as.data.frame()
-row.names(po.common.mut) <- po.common.mut$data %>% gsub(".*po_", "", .) %>% gsub(".*ori", "0", .) %>% gsub("_mapped.*", "", .)
+row.names(po.common.mut) <- po.common.mut$data %>% gsub(".*po_", "", .) %>% gsub(".*ori", "0", .) %>%
+  gsub("_mapped.*", "", .) %>%
+  gsub("^1", "Sl.L", .) %>%
+  gsub("^2", "St.L", .) %>%
+  gsub("^3", "Nb.L", .) %>%
+  gsub("^4", "CTF.L", .) %>%
+  gsub("^5", "MIX.L", .) %>%
+  
+  gsub("L(\\d)", "L\\1 [", .) %>%
+  gsub("\\[(\\d+)", "[\\1th]", .) %>%
+  gsub("1th]", "1st]", .) %>%
+  gsub("2th]", "2nd]", .) %>%
+  gsub("3th]", "3rd]", .) %>%
+  gsub("^0", "PVYSt", .)
 po.common.mut <- po.common.mut[-1] %>% t() %>% as.data.frame()
 
 po.mtx.cat.orf <- po.mtx.cat[row.names(po.mtx.cat) %in% row.names(po.common.mut),] # all mutations in coding region so far
 
-po.common.nonsyn <- po.mtx.cat.orf[apply(po.common.mut, 1, function(x) any(grepl("nonsyn", x))),]
-po.common.syn <- po.mtx.cat.orf[apply(po.common.mut, 1, function(x) any(grepl("^syn", x))),]
+po.common.mut <- po.common.mut[po.mtx.cat.orf %>% colnames()]
+po.common.mut <- po.common.mut[po.mtx.cat.orf %>% rownames(),]
+
+po.common.nonsyn <- substitute.freq.syn_nonsyn(po.mtx.cat.orf, po.common.mut, "nonsyn")
+po.common.syn <- substitute.freq.syn_nonsyn(po.mtx.cat.orf, po.common.mut, "syn")
+po.common.stop <- substitute.freq.syn_nonsyn(po.mtx.cat.orf, po.common.mut, "stop")
 
 # Shannon entropy
 
@@ -342,14 +471,16 @@ po.entropy.pos.mtx <- po.entropy.pos.mtx %>% lapply(function(x) x %>% as.data.fr
 
 be.fixed.tb <- list(nonsyn = be.common.nonsyn,
                     syn = be.common.syn,
+                    stop = be.common.stop,
                     UTR = be.mtx.cat[!rownames(be.mtx.cat) %in% rownames(be.common.mut),]) %>% bind_rows(.id = "type") %>%
-  mutate(., position = rownames(.) %>% gsub("[A-Z]", "", .) %>% as.numeric()) %>%
+  mutate(., position = rownames(.) %>% gsub("[A-Z]", "", .) %>% gsub("\\..*[0-9]$", "", .) %>% as.numeric()) %>%
   pivot_longer(-c(position, type), names_to = "sample", values_to = "frequency") %>% dplyr::filter(frequency > 0)
 
 po.fixed.tb <- list(nonsyn = po.common.nonsyn,
                     syn = po.common.syn,
+                    stop = po.common.stop,
                     UTR = po.mtx.cat[!rownames(po.mtx.cat) %in% rownames(po.common.mut),]) %>% bind_rows(.id = "type") %>%
-  mutate(., position = rownames(.) %>% gsub("[A-Z]", "", .) %>% as.numeric()) %>%
+  mutate(., position = rownames(.) %>% gsub("[A-Z]", "", .) %>% gsub("\\..*[0-9]$", "", .) %>% as.numeric()) %>%
   pivot_longer(-c(position, type), names_to = "sample", values_to = "frequency") %>% dplyr::filter(frequency > 0)
 
 entropy.pos.gg <- ggarrange(ggplot() +
@@ -362,21 +493,26 @@ entropy.pos.gg <- ggarrange(ggplot() +
                                        data = be.fixed.tb %>%
                                          dplyr::filter(frequency == 1 & type == "syn") %>%
                                          dplyr::mutate(frequency := max(be.entropy.pos.mtx$entropy)),
-                                       color = "grey40", size = .05) +
+                                       color = "grey40", linewidth = .05) +
                               geom_col(mapping = aes(x = position, y = frequency),
                                        data = be.fixed.tb %>%
                                          dplyr::filter(frequency == 1 & type == "nonsyn") %>%
                                          dplyr::mutate(frequency := max(be.entropy.pos.mtx$entropy)),
-                                       color = "red", size = .05) +
+                                       color = "red", linewidth = .05) +
+                              geom_col(mapping = aes(x = position, y = frequency),
+                                       data = be.fixed.tb %>%
+                                         dplyr::filter(frequency == 1 & type == "stop") %>%
+                                         dplyr::mutate(frequency := max(be.entropy.pos.mtx$entropy)),
+                                       color = "grey40", linewidth = .05) +
                               geom_col(mapping = aes(x = position, y = frequency),
                                        data = be.fixed.tb %>%
                                          dplyr::filter(frequency == 1 & type == "UTR") %>%
                                          dplyr::mutate(frequency := max(be.entropy.pos.mtx$entropy)),
-                                       color = "grey70", size = .05) +
+                                       color = "grey70", linewidth = .05) +
                               
                               geom_point(mapping = aes(x = position, y = entropy),
                                        data = be.entropy.pos.mtx,
-                                       fill = "black", size = .05) +
+                                       fill = "black", size = .01) +
                               
                               facet_wrap(~sample %>% factor(levels = sample_levels),
                                          ncol = 1, strip.position = "left") +
@@ -402,17 +538,22 @@ entropy.pos.gg <- ggarrange(ggplot() +
                                        data = po.fixed.tb %>%
                                          dplyr::filter(frequency == 1 & type == "syn") %>%
                                          dplyr::mutate(frequency := max(po.entropy.pos.mtx$entropy)),
-                                       color = "grey40", size = .05) +
+                                       color = "grey40", linewidth = .05) +
                               geom_col(mapping = aes(x = position, y = frequency),
                                        data = po.fixed.tb %>%
                                          dplyr::filter(frequency == 1 & type == "nonsyn") %>%
                                          dplyr::mutate(frequency := max(po.entropy.pos.mtx$entropy)),
-                                       color = "red", size = .05) +
+                                       color = "red", linewidth = .05) +
+                              geom_col(mapping = aes(x = position, y = frequency),
+                                       data = po.fixed.tb %>%
+                                         dplyr::filter(frequency == 1 & type == "stop") %>%
+                                         dplyr::mutate(frequency := max(po.entropy.pos.mtx$entropy)),
+                                       color = "grey40", linewidth = .05) +
                               geom_col(mapping = aes(x = position, y = frequency),
                                        data = po.fixed.tb %>%
                                          dplyr::filter(frequency == 1 & type == "UTR") %>%
                                          dplyr::mutate(frequency := max(po.entropy.pos.mtx$entropy)),
-                                       color = "grey70", size = .05) +
+                                       color = "grey70", linewidth = .05) +
                               
                               geom_point(mapping = aes(x = position, y = entropy),
                                        data = po.entropy.pos.mtx,
@@ -540,62 +681,89 @@ apd.aov <- aov(apd.lm)
 
 ggsave("apd.pdf", apd.gg, width = 6.85, height = 3.6)
 
-# AFD
+# FST 
 
-afd.pipe <- function(df,
-                     rownm = NULL,
-                     sum = TRUE,
-                     limits = NULL) {
-  
-  if (!is.null(limits)) {
-    df <- df %>% dplyr::filter(., as.numeric(gsub("[ACTG]", "", rownames(.))) %in% limits)
-  }
-  
-  afd <- lapply(setNames(nm = colnames(df)), function(x) {
-    lapply(setNames(colnames(df),
-                    nm = colnames(df) %>% paste0("vs.", .)), function(y) {
-      
-      if (!is.null(rownm)) df <- df[rownames(df) %in% rownm,]
-      
-      calc.afd(df[c(x, y)], sum)
-    })
-  })
-  
-  if (!sum) return(afd)
-  
-  afd <- afd %>% unlist() %>% as.data.frame()
+fst <- lapply(setNames(c("pvybe", "pvypo"), nm = c("PVYNb", "PVYSt")), function(x) {
+  list(fst = read.table(paste0("sam_aln/", x, "_fullgenome.fst.tb"), col.names = c("sample1", "sample2", "fst")),
+       sample.names = read.table("sam_aln/sample_order.txt", col.names = "sample") %>%
+         filter(grepl(x, sample, ignore.case = TRUE)))
+})
+
+fst$PVYNb$sample.names <- fst$PVYNb$sample.names %>%
+  mutate(sample := sample %>% gsub(".*be_", "", .) %>%
+           gsub(".*ori", "PVYNb", .) %>%
+           gsub("_mapped.*", "", .) %>%
+           
+           gsub("^1", "Sl.L", .) %>%
+           gsub("^2", "St.L", .) %>%
+           gsub("^3", "Nb.L", .) %>%
+           gsub("^4", "CTF.L", .) %>%
+           gsub("^5", "MIX.L", .) %>%
+           
+           gsub("L(\\d)", "L\\1 [", .) %>%
+           gsub("\\[(\\d+)", "[\\1th]", .) %>%
+           gsub("1th]", "1st]", .) %>%
+           gsub("2th]", "2nd]", .) %>%
+           gsub("3th]", "3rd]", .))
+
+fst$PVYSt$sample.names <- fst$PVYSt$sample.names %>%
+  mutate(sample := sample %>%
+           gsub(".*po_", "", .) %>%
+           gsub(".*ori", "PVYSt", .) %>%
+           gsub("_mapped.*", "", .) %>%
+           
+           gsub("^1", "Sl.L", .) %>%
+           gsub("^2", "St.L", .) %>%
+           gsub("^3", "Nb.L", .) %>%
+           gsub("^4", "CTF.L", .) %>%
+           gsub("^5", "MIX.L", .) %>%
+           
+           gsub("L(\\d)", "L\\1 [", .) %>%
+           gsub("\\[(\\d+)", "[\\1th]", .) %>%
+           gsub("1th]", "1st]", .) %>%
+           gsub("2th]", "2nd]", .) %>%
+           gsub("3th]", "3rd]", .))
+
+correct.fst.sample.names <- function() {
+  lapply(fst, function(x) {
     
-  colnames(afd) <- "total AFD"
-  afd$sample1 <- rownames(afd) %>% gsub(".*\\.vs\\.", "", .)
-  afd$sample2 <- rownames(afd) %>% gsub("\\.vs\\..*", "", .)
-  
-  return(afd)
+    out <- data.frame(sample1 = character(),
+                      sample2 = character(),
+                      fst = numeric())
+    
+    for (i in 1:nrow(x$fst)) {
+      
+      row <- x$fst[i,]
+      sample1 <- x$sample.names[row$sample1, "sample"]
+      sample2 <- x$sample.names[row$sample2, "sample"]
+      
+      out <- out %>% rbind(list(sample1 = sample1, sample2 = sample2, fst = row$fst))
+    }
+    samples1 <- out$sample1
+    out <- out %>% rbind(out %>% mutate(sample1 := sample2,
+                                        sample2 := samples1))
+  })
 }
 
-be.afd <- afd.pipe(be.mtx.cat)
-po.afd <- afd.pipe(po.mtx.cat)
+fst.tb <- correct.fst.sample.names() %>%
+  bind_rows(.id = "isolate") %>%
+  mutate(sample1 := factor(sample1, levels = sample_levels),
+         sample2 := factor(sample2, levels = sample_levels))
 
-afd.tb <- bind_rows(list(PVYNb = be.afd, PVYSt = po.afd), .id = "isolate")
-afd.tb$sample1 <- factor(afd.tb$sample1, levels = sample_levels)
-
-afd.tb$sample2 <- factor(afd.tb$sample2, levels = sample_levels)
-
-afd.gg <- afd.tb %>%
-  ggplot(aes(sample1, sample2, fill = `total AFD`)) +
+fst.gg <- fst.tb %>%
+  ggplot(aes(sample1, sample2, fill = `fst`)) +
   geom_tile() +
-  scale_fill_viridis() +
+  scale_fill_viridis(name = "F<sub>ST</sub>") +
   facet_wrap(~isolate, scales = "free") +
   scale_y_discrete(limits = rev) +
   theme(axis.title = element_blank(),
         axis.text = element_text(size = 6),
         axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
-        legend.title = element_text(size = 8),
+        legend.title = ggtext::element_markdown(size = 8),
         legend.text = element_text(size = 6))
 
-ggsave("afd.pdf", afd.gg, width = 6.85, height = 3.6)
-
-ggsave("afd_apd.pdf",
-       ggarrange(afd.gg %>% annotate_figure(fig.lab = "a"),
+ggsave("fst_apd.pdf",
+       ggarrange(fst.gg %>% annotate_figure(fig.lab = "a"),
                  apd.gg,
                  ncol = 1),
        width = 6.85, height = 7)
@@ -626,296 +794,123 @@ write_xlsx(list(`pct of snps from 0` = bind_rows(list(PVYNb = be.mut_in_4,
                 `diversity (Shannon entropy)` = bind_rows(list(be = be.entropy.mtx,
                                                                po = po.entropy.mtx),
                                                           .id = "isolate"),
-                `AFD` = afd.tb),
+                `FST` = fst.tb),
            "results.xlsx")
 
-# mean nonsyn AFD / mean syn AFD
+# results
 
-afd.pipe.time <- function(df,
-                          rownm = NULL,
-                          sum = TRUE,
-                          limits = NULL) {
-  
-  if (!is.null(limits)) {
-    df <- df %>% dplyr::filter(., as.numeric(gsub("[ACTG]", "", rownames(.))) %in% limits)
-  }
-  
-  afd <- lapply(setNames(2:ncol(df),
-                         nm = paste0(colnames(df[1:(ncol(df) - 1)]),
-                                     ".vs.",
-                                     colnames(df[2:ncol(df)]))),
-                function(x) {
-                  
-                  if (!is.null(rownm)) df <- df[rownames(df) %in% rownm,]
-                  
-                  df <- df[c(x - 1, x)]
-                  df <- df[rowSums(df) > 0,]
-                  
-                  afd.res <- calc.afd(df, sum)
-                  
-                  if (sum) return(list(AFD = afd.res,
-                                       n.variable.snps = nrow(df)))
-                  
-                  return(list(AFD = afd.res,
-                              n.variable.snps = nrow(df),
-                              Position = names(afd.res) %>% gsub("\\..*", "", .) %>% as.numeric()))
-  }) %>% bind_rows(.id = "name")
-  
-  if (!sum) return(afd)
+# number of fixed SNPs
 
-  afd$sample1 <- afd$name %>% gsub("\\.vs\\..*", "", .)
-  afd$sample2 <- afd$name %>% gsub(".*\\.vs\\.", "", .)
-  
-  return(afd %>% dplyr::select(-name))
-}
+be.fixed.tb %>% filter(frequency == 1) %>% dplyr::select(sample) %>% table()
+po.fixed.tb %>% filter(frequency == 1) %>% dplyr::select(sample) %>% table()
 
-rownames(cistron) <- cistron$cistron
+# syn/nonsyn fixed SNPs
 
-be.afd.syn_nonsyn.per_cistron <- apply(cistron %>% filter(cistron != "PIPO"), 1, function(x) {
-  
-  limits <- x["x1"]:x["x2"]
-  
-  lapply(be.mtx.cat %>% colnames() %>%
-           gsub(" \\[.*", "", .) %>%
-           grep("PVY", ., value = TRUE, invert = TRUE) %>%
-           unique() %>% setNames(nm = .),
-         function(y) {
-           
-           # sort samples in line by time and include original isolate
-           
-           samples <- c("PVYNb", grep(y, colnames(be.mtx.cat), value = TRUE))
-           samples <- samples[c(1,
-                                order(grep(y, colnames(be.mtx.cat), value = TRUE) %>%
-                                        gsub(".* \\[", "", .) %>%
-                                        gsub("[a-z]*\\]", "", .) %>%
-                                        as.numeric()) + 1)]
-           
-           df.line.time <- be.mtx.cat[samples]
-           
-           list(nonsyn = afd.pipe.time(df.line.time, rownames(be.common.nonsyn), TRUE, limits),
-                syn = afd.pipe.time(df.line.time, rownames(be.common.syn), TRUE, 173:9361)) %>% bind_rows(.id = "mutation") %>%
-             dplyr::mutate(Passage = sample2 %>% gsub(".* \\[", "", .) %>%
-                             gsub("[a-z]*\\]", "", .) %>%
-                             as.numeric(),
-                           `Mean AFD` = AFD / n.variable.snps)
-         }) %>% bind_rows(.id = "Line")
-  
-}) %>% bind_rows(.id = "Cistron")
-
-po.afd.syn_nonsyn.per_cistron <- apply(cistron %>% filter(cistron != "PIPO"), 1, function(x) {
-  
-  limits <- x["x1"]:x["x2"]
-  
-  lapply(po.mtx.cat %>% colnames() %>%
-           gsub(" \\[.*", "", .) %>%
-           grep("PVY", ., value = TRUE, invert = TRUE) %>%
-           unique() %>% setNames(nm = .),
-         function(y) {
-           
-           # sort samples in line by time and include original isolate
-           
-           samples <- c("PVYSt", grep(y, colnames(po.mtx.cat), value = TRUE))
-           samples <- samples[c(1,
-                                order(grep(y, colnames(po.mtx.cat), value = TRUE) %>%
-                                        gsub(".* \\[", "", .) %>%
-                                        gsub("[a-z]*\\]", "", .) %>%
-                                        as.numeric()) + 1)]
-           
-           df.line.time <- po.mtx.cat[samples]
-           
-           list(nonsyn = afd.pipe.time(df.line.time, rownames(po.common.nonsyn), TRUE, limits),
-                syn = afd.pipe.time(df.line.time, rownames(po.common.syn), TRUE, 173:9361)) %>% bind_rows(.id = "mutation") %>%
-             dplyr::mutate(Passage = sample2 %>% gsub(".* \\[", "", .) %>%
-                             gsub("[a-z]*\\]", "", .) %>%
-                             as.numeric(),
-                           `Mean AFD` = AFD / n.variable.snps)
-         }) %>% bind_rows(.id = "Line")
-}) %>% bind_rows(.id = "Cistron")
-
-mean.afd.syn_nonsyn <- list(PVYNb = be.afd.syn_nonsyn.per_cistron,
-                            PVYSt = po.afd.syn_nonsyn.per_cistron) %>%
+be.fixed.tb$sample %>% unique() %>% setNames(nm = .) %>%
   lapply(function(x) {
     
-    x %>%
-      dplyr::select(Cistron, Line, mutation, Passage, `Mean AFD`) %>%
-      pivot_wider(names_from = mutation, values_from = `Mean AFD`)
+    tb <- be.fixed.tb %>% dplyr::filter(sample == x)
+    syn <- tb %>% filter(frequency == 1 & type == "syn") %>% nrow()
+    nonsyn <- tb %>% filter(frequency == 1 & type == "nonsyn") %>% nrow()
+    stop <- tb %>% filter(frequency == 1 & type == "stop") %>% nrow()
+    list(syn = syn, nonsyn = nonsyn, stop = stop)
     
-  }) %>%
-  bind_rows(.id = "Virus") %>%
-  dplyr::select(Cistron, Line, Passage, Virus, nonsyn, syn) %>%
-  dplyr::mutate(`Mean AFD nonsyn / mean AFD syn` = nonsyn / syn) %>%
-  dplyr::rename(`Mean AFD syn` = syn,
-                `Mean AFD nonsyn` = nonsyn)
+  })
 
-mean.afd.syn_nonsyn.cistron.gg <- mean.afd.syn_nonsyn %>%
-  dplyr::mutate(Treatment = Line %>% gsub("\\..*", "", .),
-                Sample = paste0(Line, "[", Passage, "]")) %>%
-  ggplot(aes(Cistron %>% factor(levels = cistron$cistron), `Mean AFD nonsyn / mean AFD syn`)) +
+po.fixed.tb$sample %>% unique() %>% setNames(nm = .) %>%
+  lapply(function(x) {
+    
+    tb <- po.fixed.tb %>% dplyr::filter(sample == x)
+    syn <- tb %>% filter(frequency == 1 & type == "syn") %>% nrow()
+    nonsyn <- tb %>% filter(frequency == 1 & type == "nonsyn") %>% nrow()
+    stop <- tb %>% filter(frequency == 1 & type == "stop") %>% nrow()
+    list(syn = syn, nonsyn = nonsyn, stop = stop)
+    
+  })
+
+# SNPgenie
+
+snpgenie.products <- lapply(paste0("lofreqout_vslow/products_results/", list.files("lofreqout_vslow/products_results/", "product_results.txt")),
+                            function(x) {
+                              read.table(x, header = TRUE) %>%
+                                mutate(mean_gdiv_polymorphic := mean_gdiv_polymorphic %>%
+                                         gsub("\\*", "0", .) %>% as.numeric(),
+                                       mean_N_gdiv := mean_N_gdiv %>%
+                                         gsub("\\*", "0", .) %>% as.numeric(),
+                                       mean_S_gdiv := mean_S_gdiv %>%
+                                         gsub("\\*", "0", .) %>% as.numeric())
+                            }) %>% bind_rows() %>%
+  mutate(Virus = file %>%
+           gsub("_.*", "", .) %>%
+           gsub("PVYbe", "PVYNb", .) %>%
+           gsub("PVYpo", "PVYSt", .),
+         Treatment = file %>%
+           gsub("PVYbe_ori.*", "PVYNb", .) %>%
+           gsub("PVYpo_ori.*", "PVYSt", .) %>%
+           gsub("PVY[b,p]._", "", .) %>%
+           gsub("^1", "Sl.L", .) %>%
+           gsub("^2", "St.L", .) %>%
+           gsub("^3", "Nb.L", .) %>%
+           gsub("^4", "CTF.L", .) %>%
+           gsub("^5", "MIX.L", .) %>%
+           gsub("\\.L.*", "", .),
+         Line = file %>%
+           gsub("PVY.._[0-9]", "", .) %>%
+           gsub("[0-9]_.*|10_.*", "", .),
+         Passage = file %>%
+           gsub("PVY.._[0-9][0-9]", "", .) %>%
+           gsub("_.*", "", .))
+
+snpgenie.products.tb <- snpgenie.products %>%
+  dplyr::mutate(`piN/piS` = piN/piS,
+                `piN/piS` := replace(`piN/piS`, `piN/piS` == Inf | is.nan(`piN/piS`) | `piN/piS` == 0, NA)) #%>%
+  #rename(`Mean Genetic Diversity` = mean_gdiv_polymorphic)
+
+snpgenie.products.lm <- lm(`piN/piS` ~ Virus + Treatment + product, snpgenie.products.tb %>%
+                             dplyr::select(product, `piN/piS`, #`Mean Genetic Diversity`,
+                                           Virus, Treatment, Line, Passage))
+
+snpgenie.gg <- snpgenie.products.tb %>%
+  dplyr::select(product, `piN/piS`, #`Mean Genetic Diversity`, 
+                Virus, Treatment, Line, Passage) %>%
+  pivot_longer(-c(product, Virus, Treatment, Line, Passage), names_to = "metric") %>%
+  dplyr::mutate(Sample = paste0(Treatment, ".L", Line, "[", Passage, "]") %>%
+                  gsub("\\.LPVY.*", "", .),
+                Treatment := Treatment %>% gsub("PVY.*", "Original", .) %>% factor(levels = c("Original", "Sl", "St", "Nb", "CTF", "MIX")),
+                metric := metric %>% gsub("piN/piS", "pi*N/pi*S", .) %>% gsub(" ", "~", .)) %>%
+  rename(Cistron = product) %>%
+  dplyr::filter(!is.na(value)) %>%
+  ggplot(aes(Cistron %>% factor(levels = cistron$cistron), value)) +
   geom_boxplot() +
   geom_point(aes(color = Treatment)) +
   geom_text_repel(aes(label = Sample), size = 1.5, seed = 100) +
-  geom_hline(yintercept = 1, linetype = "dashed") +
-  facet_wrap(~Virus) +
+  facet_grid(rows = vars(metric), cols = vars(Virus), scales = "free", switch = "y", labeller = label_parsed) +
   xlab("Cistron") + 
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5))
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+        axis.title.y = element_blank(),
+        strip.background.y = element_blank(),
+        strip.placement = "outside")
 
-ggsave("mean.afd.syn_nonsyn.cistron.pdf", mean.afd.syn_nonsyn.cistron.gg, width = 6.85, height = 5)
+snpgenie.sup.gg <- snpgenie.products.tb %>%
+  dplyr::select(product, mean_gdiv_polymorphic, mean_N_gdiv, mean_S_gdiv, piN, piS,
+                Virus, Treatment, Line, Passage) %>%
+  pivot_longer(-c(product, Virus, Treatment, Line, Passage), names_to = "metric") %>%
+  dplyr::mutate(Sample = paste0(Treatment, ".L", Line, "[", Passage, "]") %>%
+                  gsub("\\.LPVY.*", "", .),
+                Treatment := Treatment %>% gsub("PVY.*", "Ancestral", .) %>% factor(levels = c("Ancestral", "Sl", "St", "Nb", "CTF", "MIX")),
+                metric := metric %>% gsub("piN/piS", "pi*N/pi*S", .) %>% gsub(" ", "~", .)) %>%
+  rename(Cistron = product) %>%
+  dplyr::filter(!is.na(value)) %>%
+  ggplot(aes(Cistron %>% factor(levels = cistron$cistron), value)) +
+  geom_boxplot() +
+  geom_point(aes(color = Treatment)) +
+  geom_text_repel(aes(label = Sample), size = 1.5, seed = 100) +
+  facet_grid(rows = vars(metric), cols = vars(Virus), scales = "free", switch = "y", labeller = label_parsed) +
+  xlab("Cistron") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+        axis.title.y = element_blank(),
+        strip.background.y = element_blank(),
+        strip.placement = "outside")
 
-# AFD by position, then for nonsyn, calculate (AFD - (mean AFD syn)) / (SD syn)
-# not in final manuscript
-
-be.afd.syn_nonsyn.per_site <- apply(cistron %>% filter(cistron != "PIPO"), 1, function(x) {
-  
-  limits <- x["x1"]:x["x2"]
-  
-  lapply(be.mtx.cat %>% colnames() %>%
-           gsub(" \\[.*", "", .) %>%
-           grep("PVY", ., value = TRUE, invert = TRUE) %>%
-           unique() %>% setNames(nm = .),
-         function(y) {
-           
-           # sort samples in line by time and include original isolate
-           
-           samples <- c("PVYNb", grep(y, colnames(be.mtx.cat), value = TRUE))
-           samples <- samples[c(1,
-                                order(grep(y, colnames(be.mtx.cat), value = TRUE) %>%
-                                        gsub(".* \\[", "", .) %>%
-                                        gsub("[a-z]*\\]", "", .) %>%
-                                        as.numeric()) + 1)]
-           
-           df.line.time <- be.mtx.cat[samples]
-           
-           syn <- afd.pipe.time(df.line.time, rownames(be.common.syn), FALSE, 173:9361)
-           
-           summarise.syn <- syn %>% group_by(name) %>% summarise(`Mean syn AFD` = mean(AFD), `SD syn AFD` = sd(AFD))
-           
-           afd.tb <- list(nonsyn = afd.pipe.time(df.line.time, rownames(be.common.nonsyn), FALSE, limits) %>%
-                  filter(n.variable.snps > 0),
-                syn = syn) %>% bind_rows(.id = "mutation") %>%
-             mutate(.,
-                    Passage = name %>% gsub(".* \\[", "", .) %>%
-                      gsub("[a-z]*\\]", "", .) %>%
-                      as.numeric(),
-                    Sample = name %>% gsub(".*vs\\.", "", .))
-           
-           mean.syn.afd <- summarise.syn[match(afd.tb$name, summarise.syn$name), "Mean syn AFD"] %>% unlist()
-           sd.syn.afd <- summarise.syn[match(afd.tb$name, summarise.syn$name), "SD syn AFD"] %>% unlist()
-           
-           afd.tb %>% mutate(`Standardized AFD` = (AFD - mean.syn.afd) / sd.syn.afd,
-                             `Mean syn AFD` = mean.syn.afd,
-                             `SD syn AFD` = sd.syn.afd)
-           
-         }) %>% bind_rows(.id = "Line")
-  
-}) %>% bind_rows(.id = "Cistron")
-
-po.afd.syn_nonsyn.per_site <- apply(cistron %>% filter(cistron != "PIPO"), 1, function(x) {
-  
-  limits <- x["x1"]:x["x2"]
-  
-  lapply(po.mtx.cat %>% colnames() %>%
-           gsub(" \\[.*", "", .) %>%
-           grep("PVY", ., value = TRUE, invert = TRUE) %>%
-           unique() %>% setNames(nm = .),
-         function(y) {
-           
-           # sort samples in line by time and include original isolate
-           
-           samples <- c("PVYSt", grep(y, colnames(po.mtx.cat), value = TRUE))
-           samples <- samples[c(1,
-                                order(grep(y, colnames(po.mtx.cat), value = TRUE) %>%
-                                        gsub(".* \\[", "", .) %>%
-                                        gsub("[a-z]*\\]", "", .) %>%
-                                        as.numeric()) + 1)]
-           
-           df.line.time <- po.mtx.cat[samples]
-           
-           syn <- afd.pipe.time(df.line.time, rownames(po.common.syn), FALSE, 173:9361)
-           
-           summarise.syn <- syn %>% group_by(name) %>% summarise(`Mean syn AFD` = mean(AFD), `SD syn AFD` = sd(AFD))
-           
-           afd.tb <- list(nonsyn = afd.pipe.time(df.line.time, rownames(po.common.nonsyn), FALSE, limits) %>%
-                            filter(n.variable.snps > 0),
-                          syn = syn) %>% bind_rows(.id = "mutation") %>%
-             mutate(.,
-                    Passage = name %>% gsub(".* \\[", "", .) %>%
-                      gsub("[a-z]*\\]", "", .) %>%
-                      as.numeric(),
-                    Sample = name %>% gsub(".*vs\\.", "", .))
-           
-           mean.syn.afd <- summarise.syn[match(afd.tb$name, summarise.syn$name), "Mean syn AFD"] %>% unlist()
-           sd.syn.afd <- summarise.syn[match(afd.tb$name, summarise.syn$name), "SD syn AFD"] %>% unlist()
-           
-           afd.tb %>% mutate(`Standardized AFD` = (AFD - mean.syn.afd) / sd.syn.afd,
-                             `Mean syn AFD` = mean.syn.afd,
-                             `SD syn AFD` = sd.syn.afd)
-           
-         }) %>% bind_rows(.id = "Line")
-}) %>% bind_rows(.id = "Cistron")
-
-afd.syn_nonsyn.per_site <- list(PVYNb = be.afd.syn_nonsyn.per_site,
-                                PVYSt = po.afd.syn_nonsyn.per_site) %>%
-  bind_rows(.id = "Virus") %>%
-  dplyr::mutate(Treatment = Line %>% gsub("\\..*", "", .))
-
-standardized.afd.gg <- ggarrange(be.afd.syn_nonsyn.per_site %>%
-                                   ggplot(aes(x = Position, y = `Standardized AFD`)) +
-                                   
-                                   geom_segment(aes(x = x1, xend = x2, y = y1, yend = y2, color = cistron),
-                                                cistron %>% dplyr::mutate(y1 := 0,
-                                                                          y2 := 0),
-                                                linewidth = 3) +
-                                   
-                                   geom_point(data = be.afd.syn_nonsyn.per_site %>%
-                                                dplyr::filter(mutation == "syn"),
-                                              color = "black", size = .025) +
-                                   geom_point(data = be.afd.syn_nonsyn.per_site %>%
-                                                dplyr::filter(mutation == "nonsyn"),
-                                              color = "red", size = .025) +
-                                   
-                                   facet_wrap(~Sample %>% factor(levels = sample_levels),
-                                              ncol = 1, scales = "free_y", strip.position = "left") +
-                                   theme(axis.title = element_blank(),
-                                         strip.text = element_text(size = 5),
-                                         strip.background = element_blank(),
-                                         strip.placement = "outside",
-                                         title = element_text(size = 6),
-                                         axis.text = element_text(size = 5),
-                                         legend.text = element_text(size = 5),
-                                         legend.title = element_blank(),
-                                         legend.key.size = unit(1, "mm")) +
-                                   scale_color_viridis(discrete = TRUE) +
-                                   ggtitle("PVYNb"),
-                                 
-                                 po.afd.syn_nonsyn.per_site %>%
-                                   ggplot(aes(x = Position, y = `Standardized AFD`)) +
-                                   geom_segment(aes(x = x1, xend = x2, y = y1, yend = y2, color = cistron),
-                                                cistron %>% dplyr::mutate(y1 := 0,
-                                                                          y2 := 0),
-                                                linewidth = 3) +
-                                   geom_point(data = po.afd.syn_nonsyn.per_site %>%
-                                                dplyr::filter(mutation == "syn"),
-                                              color = "black", size = .025) +
-                                   geom_point(data = po.afd.syn_nonsyn.per_site %>%
-                                                dplyr::filter(mutation == "nonsyn"),
-                                              color = "red", size = .025) +
-                                   facet_wrap(~Sample %>% factor(levels = sample_levels),
-                                              ncol = 1, scales = "free_y", strip.position = "left") +
-                                   theme(axis.title = element_blank(),
-                                         strip.text = element_text(size = 5),
-                                         strip.background = element_blank(),
-                                         strip.placement = "outside",
-                                         title = element_text(size = 6),
-                                         axis.text = element_text(size = 5),
-                                         legend.text = element_text(size = 5),
-                                         legend.title = element_blank(),
-                                         legend.key.size = unit(1, "mm")) +
-                                   scale_color_viridis(discrete = TRUE) +
-                                   ggtitle("PVYSt"),
-                                 common.legend = TRUE, legend = "right") %>%
-  annotate_figure(bottom = text_grob("Position", size = 6),
-                  left = text_grob("Standardized AFD", size = 6, rot = 90))
-
-ggsave("standardized_afd.pdf", standardized.afd.gg, width = 6.85, height = 9.21)
-
-afd.syn_nonsyn.per_site %>% filter(mutation == "nonsyn" & `Standardized AFD` > 1.5) %>% print(n = 70)
+ggsave("snpgenie_results.pdf", snpgenie.gg, width = 6.85, height = 3)
+ggsave("snpgenie_results_sup.pdf", snpgenie.sup.gg, width = 6.85, height = 9.21)
